@@ -9,9 +9,9 @@ module spi_peripheral (
     input  wire       clk,      // clock
     input  wire       rst_n,    // active low asynch reset
 
-    input wire ncs,
-    input wire copi,       
     input wire sclk,
+    input wire copi,    
+    input wire ncs,
 
     output reg [7:0] en_reg_out_7_0,
     output reg [7:0] en_reg_out_15_8,
@@ -20,21 +20,18 @@ module spi_peripheral (
     output reg [7:0] pwm_duty_cycle
 );
 
-    localparam MAX_ADDRESS = 7'h04;
-
     reg [15:0] received_message; // [15] = r/w, [14:8] = register to write to, [7:0] = data bits
     reg [4:0]  bit_count; // count up to 16 SCLK edges to know when transaction is complete
 
-    // value-sensitive signals have N = 2 samples
-    reg ncs_synch;
-    reg copi_synch;
-
-    // edge-sensitive signals have N + 1 = 3 samples; sclk_synch[1] = old, sclk_synch[0] = new
-    reg [1:0] sclk_synch;
+    reg [2:0] sclk_synch;
+    reg [2:0] ncs_synch;
+    reg [1:0] copi_synch;
 
     wire transaction_ready = (bit_count == 5'd16) ? 1 : 0;
-    wire posedge_sclk = ~sclk_synch[1] && sclk_synch[0];
-    wire negedge_sclk = sclk_synch[1] && ~sclk_synch[0];
+    wire posedge_sclk      = ~sclk_synch[2] && sclk_synch[1];
+    wire posedge_ncs       = ~ncs_synch[2] && ncs_synch[1];
+    wire negedge_ncs       = ncs_synch[2] && ~ncs_synch[1];
+    wire low_ncs           = ~ncs_synch[2] && ~ncs_synch[1];
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -52,36 +49,37 @@ module spi_peripheral (
 
         else begin
             // synchronizer FF chain to avoid metastability
-            ncs_synch <= ncs;
-            copi_synch <= copi;
-            sclk_synch[1] <= sclk;
-            sclk_synch[0] <= sclk_synch[1];
+            // oldest = [2] -> [1] -> [0] = newest
+            ncs_synch <= {ncs_synch[1:0], ncs};
+            sclk_synch <= {sclk_synch[1:0], sclk};
 
-
-            // SPI Mode 0: shift in data on rising SCLK, shift out data on falling SCLK
+            // oldest = [1] -> [0] = newest
+            copi_synch <= {copi_synch[0], copi};
             
-            if (!ncs_synch && !transaction_ready) begin
-                // shift in data on rising SCLK edge
-                if (posedge_sclk) begin
-                    received_message <= {received_message[14:0], copi_synch};
-                    bit_count <= bit_count + 1;
-                end
+            // reset message and bit count on falling edge of nCS to start transaction
+            if (negedge_ncs) begin
+                received_message <= '0;
+                bit_count <= '0;
             end
-            else if (transaction_ready) begin
-                // shift out data on falling SCLK edge if register address is valid
-                if (ncs_synch && negedge_sclk && (received_message[14:8] <= MAX_ADDRESS)) begin
+
+            // nCS pulled low during transaction, shift in data on rising SCLK edge (SPI Mode 0)
+            else if (low_ncs && posedge_sclk && !transaction_ready) begin
+                received_message <= {received_message[14:0], copi_synch[1]};
+                bit_count <= bit_count + 1;
+            end
+
+            // transaction complete on rising edge of nCS
+            else if (posedge_ncs) begin
+                if (transaction_ready && received_message[15]) begin
                     case (received_message[14:8])
                         7'h00   : en_reg_out_7_0 <= received_message[7:0];
                         7'h01   : en_reg_out_15_8 <= received_message[7:0];
                         7'h02   : en_reg_pwm_7_0 <= received_message[7:0];
                         7'h03   : en_reg_pwm_15_8 <= received_message[7:0];
                         7'h04   : pwm_duty_cycle <= received_message[7:0];
-                        default :;
+                        default :; // do nothing for invalid addresses
                     endcase
                 end
-
-                received_message <= '0;
-                bit_count <= '0;
             end
         end
     end
