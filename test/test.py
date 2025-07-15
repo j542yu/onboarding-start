@@ -151,7 +151,74 @@ async def test_spi(dut):
 
 @cocotb.test()
 async def test_pwm_freq(dut):
-    # Write your test here
+    dut._log.info("Start PWM frequency test")
+    
+    # Set the clock period to 100 ns (10 MHz) since PWM takes in 10MHz and converts to 3kHz
+    clock = Clock(dut.clk, 100, units="ns")
+    cocotb.start_soon(clock.start())
+
+    # Reset to avoid undefined values
+    dut._log.info("Reset")
+    dut.ena.value = 1
+    dut.rst_n.value = 0
+    await ClockCycles(dut.clk, 5)
+    dut.rst_n.value = 1
+    await ClockCycles(dut.clk, 5)
+
+    dut._log.info(f"Enabling en_reg_out[0] and en_reg_pwm[0] with 50% duty cycle")
+    dut.pwm_peripheral_inst.en_reg_out_7_0.value = 0x01
+    dut.pwm_peripheral_inst.en_reg_pwm_7_0.value = 0x01
+    dut.pwm_peripheral_inst.pwm_duty_cycle = 0x7F # 50% duty cycle
+
+    # Wait one cycle for PWM waveform to stabilize
+    # Since clk has period of 1 / 10 MHz = 100 ns and PWM should have period of 1 / 3 kHz = 333 us,
+    # we wait 3500 100 ns cycles = 350 us
+    await ClockCycles(dut.clk, 3500)
+
+    try:
+        # Timeout after two PWM cycles in case PWM fails to generate proper signal
+        await cocotb.triggers.with_timeout(RisingEdge(dut.uo_out[0]), 700, "us")
+        t_rising_edge_1 = cocotb.utils.get_sim_time(units="ns")
+
+        await cocotb.triggers.with_timeout(RisingEdge(dut.uo_out[0]), 700, "us")
+        t_rising_edge_2 = cocotb.utils.get_sim_time(units="ns")
+    except cocotb.result.SimTimeoutError:
+        raise cocotb.result.TestFailure("No rising edge detected, PWM failed to toggle signal")
+
+    period = t_rising_edge_2 - t_rising_edge_1
+    # period measured in ns, so 1e9/period converts to Hz
+    frequency = 1e9/period
+    assert frequency >= 2970, f"uo_out[0] PWM frequency ({frequency: .2f} Hz) below tolerance threshold"
+    assert frequency <= 3030, f"uo_out[0] PWM frequency ({frequency: .2f} Hz) above tolerance threshold"
+
+    dut._log.info("Disabling en_reg_out[0] to get constant low signal")
+    dut.pwm_peripheral_inst.en_reg_out_7_0.value = 0x00
+
+    await ClockCycles(dut.clk, 3500)
+
+    try:
+        await cocotb.triggers.with_timeout(RisingEdge(dut.uo_out[0]), 700, "us")
+        t_rising_edge = cocotb.utils.get_sim_time(units="ns")
+    except cocotb.result.SimTimeoutError:
+        t_rising_edge = None
+    
+    assert t_rising_edge is None, "Unexpected rising edge when en_reg_out[0] is disabled"
+
+    dut._log.info("Enabling en_reg_out[0] and disabling en_pwm_out[0] to get constant high signal")
+
+    dut.pwm_peripheral_inst.en_reg_out_7_0.value = 0x01
+    dut.pwm_peripheral_inst.en_reg_pwm_7_0.value = 0x00
+
+    await ClockCycles(dut.clk, 3500)
+
+    try:
+        await cocotb.triggers.with_timeout(RisingEdge(dut.uo_out[0]), 700, "us")
+        t_rising_edge_1 = cocotb.utils.get_sim_time(units="ns")
+    except cocotb.result.SimTimeoutError:
+        t_rising_edge_1 = None
+    
+    assert t_rising_edge_1 is None, "Unexpected rising edge when en_pwm_out[0] is disabled"
+
     dut._log.info("PWM Frequency test completed successfully")
 
 
