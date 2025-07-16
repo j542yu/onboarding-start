@@ -13,14 +13,10 @@ module tt_um_uwasic_onboarding_judy_yu (
     output wire [7:0] uio_oe,   // IOs: Enable path (active high: 0=input, 1=output)
     input  wire       ena,      // always 1 when the design is powered, so you can ignore it
     input  wire       clk,      // clock
-    input  wire       rst_n,     // reset_n - low to reset
-
-    output wire       pwm_test_bit // For testing only
+    input  wire       rst_n     // reset_n - low to reset
 );
 
   assign uio_oe = 8'hFF; // Set all IOs to output
-
-  assign pwm_test_bit = uo_out[0]; // For testing only
 
   // Create wires to refer to the values of the registers
   wire [7:0] en_reg_out_7_0;

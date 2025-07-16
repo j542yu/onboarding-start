@@ -180,17 +180,28 @@ async def test_pwm_freq(dut):
     # we wait 3500 100 ns cycles = 350 us
     await ClockCycles(dut.clk, 3500)
 
-    try:
-        # Timeout after two PWM cycles in case PWM fails to generate proper signal
-        await cocotb.triggers.with_timeout(RisingEdge(dut.pwm_test_bit), 700, "us")
-        t_rising_edge_1 = cocotb.utils.get_sim_time(units="ns")
+    t_test_start = cocotb.utils.get_sim_time(units="ns")
 
-        await cocotb.triggers.with_timeout(RisingEdge(dut.pwm_test_bit), 700, "us")
-        t_rising_edge_2 = cocotb.utils.get_sim_time(units="ns")
-    except cocotb.result.SimTimeoutError:
-        raise cocotb.result.TestFailure("No rising edge detected, PWM failed to toggle signal")
+    while dut.uo_out == 1:
+        await ClockCycles(dut.clk, 1)
+        if (cocotb.utils.get_sim_time(units="ns") - t_test_start) > 3.5e5:
+            raise cocotb.result.TestFailure("Timeout - PWM failed to toggle output signal")
+        
+    while dut.uo_out == 0:
+        await ClockCycles(dut.clk, 1)
+        if (cocotb.utils.get_sim_time(units="ns") - t_test_start) > 3.5e5:
+            raise cocotb.result.TestFailure("Timeout - PWM failed to toggle output signal")
+        
+    t_rising_edge = cocotb.utils.get_sim_time(units="ns")
 
-    period = t_rising_edge_2 - t_rising_edge_1
+    while dut.uo_out == 1:
+        await ClockCycles(dut.clk, 1)
+    
+    while dut.uo_out == 0:
+        await ClockCycles(dut.clk, 1)
+
+
+    period = cocotb.utils.get_sim_time(units="ns") - t_rising_edge
     # period measured in ns, so 1e9/period converts to Hz
     frequency = 1e9/period
     assert frequency >= 2970, f"uo_out[0] PWM frequency ({frequency: .2f} Hz) below tolerance threshold"
